@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>올리브영 국내-글로벌 트렌드 분석 대시보드</title>
+    <meta name="description" content="올리브영 국내외 몰의 카테고리별 실시간 TOP 30 랭킹 데이터를 수집, 분석하여 글로벌 트렌드 비교 및 MD 상품 기획 인사이트를 제공하는 대시보드" />
+    <meta property="og:title" content="올리브영 국내-글로벌 트렌드 분석 대시보드" />
+    <meta property="og:description" content="올리브영 국내외 몰의 카테고리별 실시간 TOP 30 랭킹 데이터를 수집, 분석하여 글로벌 트렌드 비교 및 MD 상품 기획 인사이트를 제공하는 대시보드" />
+    <script>
+      (function () {
+        // 1. vite-hmr / vite-ping 전용 WebSocket 생성 시 프록시 연결 종료 에러를 일으키지 않는 안전 소켓 반환
+        var OriginalWebSocket = window.WebSocket;
+        if (OriginalWebSocket) {
+          var SafeWebSocket = function (url, protocols) {
+            var isViteWs =
+              protocols === 'vite-hmr' ||
+              protocols === 'vite-ping' ||
+              (typeof url === 'string' && url.indexOf('token=') !== -1);
+            if (isViteWs) {
+              return {
+                url: url,
+                readyState: 1,
+                OPEN: 1,
+                send: function () {},
+                close: function () {},
+                addEventListener: function () {},
+                removeEventListener: function () {}
+              };
+            }
+            return protocols !== undefined
+              ? new OriginalWebSocket(url, protocols)
+              : new OriginalWebSocket(url);
+          };
+          SafeWebSocket.prototype = OriginalWebSocket.prototype;
+          SafeWebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
+          SafeWebSocket.OPEN = OriginalWebSocket.OPEN;
+          SafeWebSocket.CLOSING = OriginalWebSocket.CLOSING;
+          SafeWebSocket.CLOSED = OriginalWebSocket.CLOSED;
+          window.WebSocket = SafeWebSocket;
+        }
+
+        // 2. 혹시 발생할 수 있는 비동기 WebSocket Unhandled Rejection 방어
+        window.addEventListener('unhandledrejection', function (event) {
+          var msg = event && event.reason && (event.reason.message || String(event.reason));
+          if (typeof msg === 'string' && msg.indexOf('WebSocket closed without opened') !== -1) {
+            event.preventDefault();
+          }
+        });
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

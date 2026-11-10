@@ -1,0 +1,6 @@
+{
+  "summary": "ZenRows 2단계 스마트 크레딧 절약 호출(SSR 경량 프록시 우선 -> JS 렌더링 폴백), 최근 25회차 스냅샷 및 알림 100건 기준 DB 자동 정리(Pruning), 그리고 24시간 주기 국내몰·글로벌몰 종합(all) 동시 자동 수집 구현 계획서입니다.",
+  "updatedAt": "2026-11-05T13:22:41.179502049Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

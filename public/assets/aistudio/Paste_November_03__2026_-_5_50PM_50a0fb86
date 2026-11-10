@@ -1,0 +1,1248 @@
+기존 코드의 극소형 폰트(`text-[9px]`~`text-[11px]`), 브라우저 흐름을 끊는 기본 `alert()` 팝업, 허위 기본값(`360`), 그리고 모든 탭 하단에 고정되어 화면 집중도를 떨어뜨리던 알림·SLA 콘솔 구조를 개선한 UI/UX 리팩토링 코드입니다. 별도의 외부 패키지 추가 설치 없이 기존에 설치된 `motion/react`와 `lucide-react`만으로 바로 적용할 수 있도록 구성했습니다.
+
+---
+
+### 주요 UI/UX 개선 포인트
+
+* **비차단형 토스트(Toast) 알림 도입**: 스크래핑 완료 및 오류 발생 시 화면을 멈추던 네이티브 `alert()`을 제거하고, 우측 상단 슬라이드 토스트 배너로 교체했습니다.
+
+
+* **우측 슬라이드 드로어(Drawer) 및 탭 분리**: 화면 하단에 항상 고정 노출되던 `AlertTracker`를 우측 슬라이드 드로어(맞춤 알림 설정·내역)와 **'SLA 품질 모니터' 전용 탭**으로 분리해 메인 분석 화면의 몰입도를 높였습니다.
+
+
+* **타이포그래피 스케일 및 가독성 상향**: 판독이 어렵던 `text-[9px]`, `text-[10px]` 크기를 제거하고 최소 `text-xs`(12px)~`text-sm`(14px) 위계로 재설계했습니다.
+
+
+* **데이터 투명성 배지 및 스켈레톤 적용**: 데이터가 없을 때 `360`을 출력하던 하드코딩을 로딩 스켈레톤으로 대체하고, 헤더에 `실시간 연동` / `시뮬레이션 모드` 상태 배지를 명확히 구분했습니다.
+
+
+
+---
+
+### 1. `src/App.tsx` (토스트 알림, 우측 알림 드로어, SLA 전용 탭 적용)
+
+기존 `src/App.tsx`의 레이아웃과 인터랙션 핸들러를 아래 코드로 교체하세요.
+
+```tsx
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import React, { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  Activity,
+  Sparkles,
+  Bell,
+  FileSpreadsheet,
+  Play,
+  CheckCircle2,
+  TrendingUp,
+  LogOut,
+  Clock,
+  ShieldCheck,
+  AlertTriangle,
+  Flame,
+  FileText,
+  Database,
+  X
+} from "lucide-react";
+import { User } from "firebase/auth";
+import { Category, Product, ScrapeRun, CustomAlert, TriggeredAlert, MDInsight } from "./types";
+import { initAuth, googleSignIn, googleSignOut } from "./firebase";
+import RankingBoard from "./components/RankingBoard";
+import ChartsBoard from "./components/ChartsBoard";
+import AIAdvisor from "./components/AIAdvisor";
+import SheetsExport from "./components/SheetsExport";
+import AlertTracker from "./components/AlertTracker";
+import ReportBuilder from "./components/ReportBuilder";
+
+interface ToastMessage {
+  id: number;
+  type: "success" | "error";
+  title: string;
+  description: string;
+}
+
+export default function App() {
+  // Navigation & Drawer States ("monitoring" 탭 추가)
+  const [activeTab, setActiveTab] = useState<"rankings" | "charts" | "ai" | "sheets" | "reports" | "monitoring">("rankings");
+  const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  // Auth States
+  const [user, setUser] = useState<User | null>(null);
+  const [needsAuth, setNeedsAuth] = useState(true);
+  const [token, setToken] = useState<string | null>(null);
+
+  // Core Data
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [historyRuns, setHistoryRuns] = useState<ScrapeRun[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedTimestamp, setSelectedTimestamp] = useState("");
+
+  // Loaded rankings
+  const [domesticProducts, setDomesticProducts] = useState<Product[]>([]);
+  const [globalProducts, setGlobalProducts] = useState<Product[]>([]);
+  const [historicalData, setHistoricalData] = useState<{ timestamp: string; products: Product[] }[]>([]);
+
+  // Alerts & Logs
+  const [alerts, setAlerts] = useState<CustomAlert[]>([]);
+  const [triggeredAlerts, setTriggeredAlerts] = useState<TriggeredAlert[]>([]);
+  const [monitoringLogs, setMonitoringLogs] = useState<any[]>([]);
+
+  // Page Loaders
+  const [isScraping, setIsScraping] = useState(false);
+  const [isDataLoading, setIsDataLoading] = useState(false);
+  const [hasNewAlert, setHasNewAlert] = useState(false);
+
+  const showToast = useCallback((type: "success" | "error", title: string, description: string) => {
+    const id = Date.now();
+    setToast({ id, type, title, description });
+    setTimeout(() => {
+      setToast((prev) => (prev?.id === id ? null : prev));
+    }, 4500);
+  }, []);
+
+  // 1. Initialize Auth State
+  useEffect(() => {
+    initAuth(
+      (currentUser, accessToken) => {
+        setUser(currentUser);
+        setToken(accessToken);
+        setNeedsAuth(false);
+      },
+      () => {
+        setUser(null);
+        setToken(null);
+        setNeedsAuth(true);
+      }
+    );
+  }, []);
+
+  // 2. Fetch Initial Categories & Run History
+  const fetchMetadata = async () => {
+    try {
+      const [catRes, runRes] = await Promise.all([
+        fetch("/api/categories"),
+        fetch("/api/scrape-history")
+      ]);
+      const catData = await catRes.json();
+      setCategories(catData);
+
+      const runData = await runRes.json();
+      if (Array.isArray(runData)) {
+        setHistoryRuns(runData);
+        if (runData.length > 0 && !selectedTimestamp) {
+          setSelectedTimestamp(runData[0].timestamp);
+        }
+      } else {
+        setHistoryRuns([]);
+      }
+    } catch (err) {
+      console.error("Error loading app metadata:", err);
+      setHistoryRuns([]);
+    }
+  };
+
+  const fetchAlerts = async () => {
+    try {
+      const [alertRes, trigRes] = await Promise.all([
+        fetch("/api/alerts"),
+        fetch("/api/triggered-alerts")
+      ]);
+      const alertData = await alertRes.json();
+      setAlerts(Array.isArray(alertData) ? alertData : []);
+
+      const trigData = await trigRes.json();
+      setTriggeredAlerts(Array.isArray(trigData) ? trigData : []);
+    } catch (err) {
+      console.error("Error loading alert configurations:", err);
+    }
+  };
+
+  const fetchMonitoringLogs = async () => {
+    try {
+      const res = await fetch("/api/monitoring-logs");
+      const data = await res.json();
+      if (Array.isArray(data)) setMonitoringLogs(data);
+    } catch (err) {
+      console.error("Error loading monitoring logs:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchMetadata();
+    fetchAlerts();
+    fetchMonitoringLogs();
+  }, []);
+
+  // Poll for triggered alerts periodically (every 12 seconds)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const trigRes = await fetch("/api/triggered-alerts");
+        if (!trigRes.ok) return;
+        const contentType = trigRes.headers.get("content-type");
+        if (!contentType?.includes("application/json")) return;
+        const trigData = await trigRes.json();
+
+        if (Array.isArray(trigData)) {
+          setTriggeredAlerts((prev) => {
+            const currentUnread = prev.filter((t) => !t.isRead).length;
+            const newUnread = trigData.filter((t: TriggeredAlert) => !t.isRead).length;
+            if (newUnread > currentUnread) setHasNewAlert(true);
+            return trigData;
+          });
+        }
+      } catch (err) {
+        console.warn("Polling request failed silently:", err);
+      }
+    }, 12000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 3. Load Rankings Data in Parallel
+  const loadRankings = useCallback(async () => {
+    if (!selectedCategory || !selectedTimestamp) return;
+    setIsDataLoading(true);
+    try {
+      const [domRes, globRes, histRes] = await Promise.all([
+        fetch(`/api/rankings?category=${selectedCategory}&mallType=domestic&timestamp=${selectedTimestamp}`),
+        fetch(`/api/rankings?category=${selectedCategory}&mallType=global&timestamp=${selectedTimestamp}`),
+        fetch(`/api/rankings/history?category=${selectedCategory}&mallType=domestic&limitCount=6`)
+      ]);
+
+      const [domData, globData, histData] = await Promise.all([
+        domRes.json(),
+        globRes.json(),
+        histRes.json()
+      ]);
+
+      setDomesticProducts(domData.products || []);
+      setGlobalProducts(globData.products || []);
+      setHistoricalData(Array.isArray(histData) ? histData : []);
+    } catch (err) {
+      console.error("Error loading rankings data:", err);
+    } finally {
+      setIsDataLoading(false);
+    }
+  }, [selectedCategory, selectedTimestamp]);
+
+  useEffect(() => {
+    loadRankings();
+  }, [selectedCategory, selectedTimestamp, loadRankings]);
+
+  // Interactive Actions
+  const handleLogin = async () => {
+    try {
+      const res = await googleSignIn();
+      if (res) {
+        setUser(res.user);
+        setToken(res.accessToken);
+        setNeedsAuth(false);
+        showToast("success", "Google 계정 연결 완료", "Google Sheets 내보내기 기능이 활성화되었습니다.");
+      }
+    } catch (err: any) {
+      showToast("error", "로그인 실패", err.message || "Google 인증 중 오류가 발생했습니다.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await googleSignOut();
+    setUser(null);
+    setToken(null);
+    setNeedsAuth(true);
+  };
+
+  const handleScrapeTrigger = async () => {
+    setIsScraping(true);
+    try {
+      const response = await fetch("/api/scrape", { method: "POST" });
+      const data = await response.json();
+      if (data.success) {
+        showToast(
+          "success",
+          "랭킹 데이터 수집 완료",
+          `수집 시각: ${new Date(data.run.timestamp).toLocaleTimeString("ko-KR")} · 신규 알림 ${data.newTriggeredAlertsCount}건`
+        );
+        await Promise.all([fetchMetadata(), fetchAlerts(), fetchMonitoringLogs()]);
+        setSelectedTimestamp(data.run.timestamp);
+      } else {
+        showToast("error", "수집 실패", data.error || "스크래핑 중 오류가 발생했습니다.");
+      }
+    } catch (err: any) {
+      showToast("error", "네트워크 오류", err.message);
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
+  const handleAddAlert = async (alertObj: Omit<CustomAlert, "id" | "createdAt">) => {
+    const newAlert: CustomAlert = {
+      ...alertObj,
+      id: `alert_${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    const res = await fetch("/api/alerts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newAlert)
+    });
+    if (res.ok) {
+      fetchAlerts();
+      showToast("success", "알림 규칙 등록 완료", `'${alertObj.name}' 조건이 활성화되었습니다.`);
+    } else {
+      throw new Error("알림 저장에 실패했습니다.");
+    }
+  };
+
+  const handleDeleteAlert = async (id: string) => {
+    const res = await fetch("/api/alerts/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+    if (res.ok) fetchAlerts();
+  };
+
+  const handleMarkAsRead = async (id: string) => {
+    const res = await fetch("/api/triggered-alerts/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+    if (res.ok) fetchAlerts();
+  };
+
+  const handleClearTriggered = async () => {
+    const res = await fetch("/api/triggered-alerts/clear", { method: "POST" });
+    if (res.ok) fetchAlerts();
+  };
+
+  const handleClearMonitoringLogs = async () => {
+    const res = await fetch("/api/monitoring-logs/clear", { method: "POST" });
+    if (res.ok) fetchMonitoringLogs();
+  };
+
+  const handleTriggerTestLogs = async () => {
+    const res = await fetch("/api/monitoring-logs/trigger-test", { method: "POST" });
+    if (res.ok) fetchMonitoringLogs();
+  };
+
+  const handleResolveMonitoringLog = async (id: string) => {
+    const res = await fetch("/api/monitoring-logs/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "resolved" })
+    });
+    if (res.ok) fetchMonitoringLogs();
+  };
+
+  const handleResolveAllMonitoringLogs = async () => {
+    const res = await fetch("/api/monitoring-logs/resolve-all", { method: "POST" });
+    if (res.ok) fetchMonitoringLogs();
+  };
+
+  const handleGenerateInsight = async (categoryId: string): Promise<MDInsight> => {
+    const res = await fetch("/api/insights/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categoryId })
+    });
+    const data = await res.json();
+    if (data.success) return data.insight;
+    throw new Error(data.error || "Gemini 분석 생성에 실패했습니다.");
+  };
+
+  const handleExportSheets = async () => {
+    if (!token) throw new Error("Google 계정 로그인이 필요합니다.");
+    const records = [
+      ...domesticProducts.map((p) => ({ ...p, timestamp: new Date(p.timestamp).toLocaleString("ko-KR") })),
+      ...globalProducts.map((p) => ({ ...p, timestamp: new Date(p.timestamp).toLocaleString("ko-KR") }))
+    ];
+    const catName = categories.find((c) => c.id === selectedCategory)?.name || selectedCategory;
+    const title = `올리브영_${catName}_랭킹분석_${new Date().toLocaleDateString("ko-KR")}`;
+
+    const res = await fetch("/api/export-sheets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken: token, title, records })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return { success: true, sheetUrl: data.sheetUrl, exportedCount: data.exportedCount };
+    }
+    throw new Error(data.error || "시트 내보내기에 실패했습니다.");
+  };
+
+  const latestRun = historyRuns[0];
+  const totalProductsCount = domesticProducts.length + globalProducts.length;
+  const unreadAlertsCount = triggeredAlerts.filter((a) => !a.isRead).length;
+  const unresolvedSlaErrors = monitoringLogs.filter((l) => l.status !== "resolved" && l.level === "error").length;
+
+  return (
+    <div className="min-h-screen bg-[#F4F6F8] text-[#1A1C1E] font-sans antialiased pb-16" id="applet-dashboard">
+      {/* 비차단형 토스트 알림 배너 */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-16 right-4 z-[60] max-w-sm w-full bg-white rounded-xl shadow-lg border border-gray-200 p-4 flex items-start gap-3"
+          >
+            {toast.type === "success" ? (
+              <CheckCircle2 className="w-5 h-5 text-[#98B941] shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-gray-900">{toast.title}</p>
+              <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">{toast.description}</p>
+            </div>
+            <button onClick={() => setToast(null)} className="text-gray-400 hover:text-gray-600 cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 1. Header Navigation Bar */}
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-xs" id="dashboard-navbar">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-[#98B941] flex items-center justify-center text-white shadow-xs">
+              <Activity className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-extrabold text-gray-900 tracking-tight">
+                  올리브영 트렌드 인텔리전스
+                </h1>
+                <span className="text-xs bg-[#98B941]/15 text-[#7a9630] font-bold px-2 py-0.5 rounded-md border border-[#98B941]/30 hidden sm:inline-block">
+                  v1.3 PRO
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 font-medium">국내몰 vs 글로벌몰 TOP 30 비교 및 AI MD 전략 대시보드</p>
+            </div>
+          </div>
+
+          {/* 우측 액션 컨트롤러 */}
+          <div className="flex items-center gap-2.5">
+            {/* 데이터 소스 투명성 배지 (실시간 vs 시뮬레이션) */}
+            <div
+              className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${
+                latestRun?.isSimulated === false
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-amber-50 border-amber-200 text-amber-800"
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  latestRun?.isSimulated === false ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
+                }`}
+              />
+              <span>{latestRun?.isSimulated === false ? "실시간 데이터 연동" : "시뮬레이션 폴백 모드"}</span>
+            </div>
+
+            {/* 알림 드로어 오픈 버튼 */}
+            <button
+              onClick={() => {
+                setHasNewAlert(false);
+                setIsAlertDrawerOpen(true);
+              }}
+              className="relative bg-gray-100 hover:bg-gray-200 text-gray-700 p-2 rounded-lg transition-colors cursor-pointer"
+              title="맞춤 알림 설정 및 내역"
+            >
+              <Bell className={`w-4 h-4 ${hasNewAlert ? "text-red-500 animate-bounce" : ""}`} />
+              {unreadAlertsCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[11px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                  {unreadAlertsCount}
+                </span>
+              )}
+            </button>
+
+            {/* 수동 스크래핑 실행 버튼 */}
+            <button
+              onClick={handleScrapeTrigger}
+              disabled={isScraping}
+              className="bg-[#98B941] hover:bg-[#85a337] active:scale-95 transition-all text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs cursor-pointer flex items-center gap-1.5 disabled:bg-gray-300 disabled:scale-100"
+            >
+              <Play className={`w-3.5 h-3.5 ${isScraping ? "animate-spin" : ""}`} />
+              <span>{isScraping ? "수집 중..." : "지금 랭킹 수집"}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* 2. Main Dashboard Stage */}
+      <main className="max-w-7xl mx-auto px-4 mt-5 space-y-5" id="dashboard-stage">
+        {/* 상단 KPI 요약 바 (가독성 개선 및 허위 숫자 360 제거) */}
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3.5" id="stats-banner-grid">
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-[#98B941]/10 flex items-center justify-center text-[#98B941]">
+              <Flame className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-xs font-semibold text-gray-500 block">추적 카테고리</span>
+              <span className="text-base font-extrabold text-gray-900">{categories.length}개 부문</span>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-[#98B941]/10 flex items-center justify-center text-[#98B941]">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-xs font-semibold text-gray-500 block">현재 카테고리 분석 상품</span>
+              {isDataLoading ? (
+                <div className="h-5 w-16 bg-gray-200 animate-pulse rounded mt-1" />
+              ) : (
+                <span className="text-base font-extrabold text-gray-900">{totalProductsCount}개 (국내·글로벌)</span>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center text-amber-600">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-xs font-semibold text-gray-500 block">최근 업데이트</span>
+              <span className="text-sm font-extrabold text-gray-900 truncate block">
+                {latestRun
+                  ? new Date(latestRun.timestamp).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
+                  : "수집 이력 없음"}
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setHasNewAlert(false);
+              setIsAlertDrawerOpen(true);
+            }}
+            className={`rounded-xl border p-4 shadow-xs flex items-center gap-3 cursor-pointer transition-all text-left ${
+              unreadAlertsCount > 0 ? "bg-red-50/70 border-red-200" : "bg-white border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            <div
+              className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                unreadAlertsCount > 0 ? "bg-red-500 text-white" : "bg-[#98B941]/10 text-[#98B941]"
+              }`}
+            >
+              <Bell className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-xs font-semibold text-gray-500 block">미확인 트렌드 알림</span>
+              <span className="text-base font-extrabold text-gray-900">{unreadAlertsCount}건 (클릭해 관리)</span>
+            </div>
+          </button>
+        </section>
+
+        {/* 3. Secondary Navigation (Tabs) */}
+        <section className="flex flex-wrap items-center justify-between border-b border-gray-200 pb-3 gap-4">
+          <div className="flex flex-wrap items-center gap-1 bg-gray-200/70 p-1 rounded-xl">
+            <button
+              onClick={() => setActiveTab("rankings")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer ${
+                activeTab === "rankings" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              실시간 랭킹 보드
+            </button>
+            <button
+              onClick={() => setActiveTab("charts")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer ${
+                activeTab === "charts" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              트렌드 차트 분석
+            </button>
+            <button
+              onClick={() => setActiveTab("ai")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === "ai" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-[#98B941]" />
+              AI MD 어드바이저
+            </button>
+            <button
+              onClick={() => setActiveTab("reports")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === "reports" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <FileText className="w-4 h-4 text-[#98B941]" />
+              리포트 빌더 (PDF)
+            </button>
+            <button
+              onClick={() => setActiveTab("sheets")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === "sheets" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4 text-[#98B941]" />
+              Google Sheets 연동
+            </button>
+            <button
+              onClick={() => setActiveTab("monitoring")}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === "monitoring" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <Database className="w-4 h-4 text-[#98B941]" />
+              SLA 품질 모니터
+              {unresolvedSlaErrors > 0 && (
+                <span className="bg-red-500 text-white text-[11px] px-1.5 py-0.2 rounded-full font-extrabold">
+                  {unresolvedSlaErrors}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* 사용자 인증 상태 카드 */}
+          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-700">
+            {user ? (
+              <div className="flex items-center gap-2 font-semibold">
+                <div className="w-6 h-6 rounded-full bg-[#98B941] text-white flex items-center justify-center text-xs font-bold uppercase">
+                  {user.email?.slice(0, 1) || "U"}
+                </div>
+                <span className="hidden sm:inline-block max-w-[150px] truncate">{user.email}</span>
+                <button onClick={handleLogout} title="로그아웃" className="text-gray-400 hover:text-red-500 cursor-pointer">
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                <span className="text-gray-500">미연결</span>
+                <button onClick={handleLogin} className="text-[#7a9630] hover:underline font-bold cursor-pointer">
+                  Google 로그인
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* 4. Tab Stage Display */}
+        <section className="min-h-[480px]">
+          <AnimatePresence mode="wait">
+            {activeTab === "rankings" && (
+              <motion.div key="rankings" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <RankingBoard
+                  categories={categories}
+                  historyRuns={historyRuns}
+                  selectedCategory={selectedCategory}
+                  setSelectedCategory={setSelectedCategory}
+                  selectedTimestamp={selectedTimestamp}
+                  setSelectedTimestamp={setSelectedTimestamp}
+                  domesticProducts={domesticProducts}
+                  globalProducts={globalProducts}
+                  isLoading={isDataLoading}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === "charts" && (
+              <motion.div key="charts" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <ChartsBoard
+                  categories={categories}
+                  selectedCategory={selectedCategory}
+                  setSelectedCategory={setSelectedCategory}
+                  domesticProducts={domesticProducts}
+                  globalProducts={globalProducts}
+                  historicalData={historicalData}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === "ai" && (
+              <motion.div key="ai" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <AIAdvisor categories={categories} onGenerateInsight={handleGenerateInsight} />
+              </motion.div>
+            )}
+
+            {activeTab === "sheets" && (
+              <motion.div key="sheets" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <SheetsExport
+                  user={user}
+                  needsAuth={needsAuth}
+                  onLogin={handleLogin}
+                  onLogout={handleLogout}
+                  onExport={handleExportSheets}
+                  recordsCount={totalProductsCount}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === "reports" && (
+              <motion.div key="reports" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <ReportBuilder
+                  categories={categories}
+                  domesticProducts={domesticProducts}
+                  globalProducts={globalProducts}
+                  historyRuns={historyRuns}
+                  selectedCategory={selectedCategory}
+                  setSelectedCategory={setSelectedCategory}
+                  selectedTimestamp={selectedTimestamp}
+                  setSelectedTimestamp={setSelectedTimestamp}
+                  isDataLoading={isDataLoading}
+                  user={user}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === "monitoring" && (
+              <motion.div key="monitoring" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                <AlertTracker
+                  mode="sla-only"
+                  categories={categories}
+                  alerts={alerts}
+                  triggeredAlerts={triggeredAlerts}
+                  onAddAlert={handleAddAlert}
+                  onDeleteAlert={handleDeleteAlert}
+                  onMarkAsRead={handleMarkAsRead}
+                  onClearTriggered={handleClearTriggered}
+                  monitoringLogs={monitoringLogs}
+                  onClearMonitoringLogs={handleClearMonitoringLogs}
+                  onTriggerTestLogs={handleTriggerTestLogs}
+                  onResolveMonitoringLog={handleResolveMonitoringLog}
+                  onResolveAllMonitoringLogs={handleResolveAllMonitoringLogs}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
+      </main>
+
+      {/* 5. 우측 슬라이드 알림 드로어 (기존 하단 고정 노출 제거) */}
+      <AnimatePresence>
+        {isAlertDrawerOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAlertDrawerOpen(false)}
+              className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50"
+            />
+            <motion.aside
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 300 }}
+              className="fixed top-0 right-0 bottom-0 w-full max-w-md bg-[#F8FAFC] z-50 shadow-2xl border-l border-gray-200 flex flex-col"
+            >
+              <div className="p-4 bg-white border-b border-gray-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-5 h-5 text-[#98B941]" />
+                  <h2 className="text-base font-extrabold text-gray-900">맞춤 트렌드 알림 센터</h2>
+                </div>
+                <button
+                  onClick={() => setIsAlertDrawerOpen(false)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                <AlertTracker
+                  mode="alerts-only"
+                  categories={categories}
+                  alerts={alerts}
+                  triggeredAlerts={triggeredAlerts}
+                  onAddAlert={handleAddAlert}
+                  onDeleteAlert={handleDeleteAlert}
+                  onMarkAsRead={handleMarkAsRead}
+                  onClearTriggered={handleClearTriggered}
+                />
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* 6. Footer Section */}
+      <footer className="max-w-7xl mx-auto px-4 mt-12 py-6 border-t border-gray-200 text-center space-y-1 text-xs text-gray-500 font-medium">
+        <p className="flex items-center justify-center gap-1.5">
+          <ShieldCheck className="w-4 h-4 text-[#98B941]" />
+          올리브영 글로벌·국내 랭킹 데이터 정합성 검증 파이프라인 적용
+        </p>
+        <p>© 2026 Olive Young Trend Intelligence. Powered by Google AI Studio & Gemini.</p>
+      </footer>
+    </div>
+  );
+}
+
+```
+
+---
+
+### 2. `src/components/AlertTracker.tsx` (`mode` 분리 지원 및 타이포그래피 개선)
+
+기존 `AlertTracker.tsx`에 `mode?: "alerts-only" | "sla-only" | "both"` 속성을 추가해 우측 드로어에서는 알림 규칙과 내역만 깔끔하게 보여주고, `SLA 품질 모니터` 탭에서는 데이터 검증 콘솔만 넓은 화면으로 보여주도록 개선했습니다. 또한 기존의 `text-[9px]`~`text-[10px]` 폰트를 모두 `text-xs`~`text-sm`으로 상향했습니다.
+
+```tsx
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import React, { useState } from "react";
+import {
+  Bell,
+  Play,
+  Settings,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  ShieldAlert,
+  Database,
+  Trash,
+  ShieldCheck
+} from "lucide-react";
+import { CustomAlert, TriggeredAlert, Category, MonitoringLog } from "../types";
+
+interface AlertTrackerProps {
+  mode?: "alerts-only" | "sla-only" | "both";
+  categories: Category[];
+  alerts: CustomAlert[];
+  triggeredAlerts: TriggeredAlert[];
+  onAddAlert: (alert: Omit<CustomAlert, "id" | "createdAt">) => Promise<void>;
+  onDeleteAlert: (id: string) => Promise<void>;
+  onMarkAsRead: (id: string) => Promise<void>;
+  onClearTriggered: () => Promise<void>;
+  monitoringLogs?: MonitoringLog[];
+  onClearMonitoringLogs?: () => Promise<void>;
+  onTriggerTestLogs?: () => Promise<void>;
+  onResolveMonitoringLog?: (id: string) => Promise<void>;
+  onResolveAllMonitoringLogs?: () => Promise<void>;
+}
+
+export default function AlertTracker({
+  mode = "both",
+  categories,
+  alerts,
+  triggeredAlerts,
+  onAddAlert,
+  onDeleteAlert,
+  onMarkAsRead,
+  onClearTriggered,
+  monitoringLogs = [],
+  onClearMonitoringLogs,
+  onTriggerTestLogs,
+  onResolveMonitoringLog,
+  onResolveAllMonitoringLogs
+}: AlertTrackerProps) {
+  const [name, setName] = useState("");
+  const [categoryId, setCategoryId] = useState("all");
+  const [conditionType, setConditionType] = useState<"first_place_change" | "brand_mention" | "rank_entry">("first_place_change");
+  const [brandName, setBrandName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [isSimulatingLogs, setIsSimulatingLogs] = useState(false);
+
+  const safeAlerts = Array.isArray(alerts) ? alerts : [];
+  const safeTriggeredAlerts = Array.isArray(triggeredAlerts) ? triggeredAlerts : [];
+  const unreadCount = safeTriggeredAlerts.filter((a) => !a.isRead).length;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setIsSubmitting(true);
+    try {
+      await onAddAlert({
+        name,
+        categoryId,
+        conditionType,
+        brandName: conditionType === "brand_mention" ? brandName : undefined,
+        isActive: true
+      });
+      setName("");
+      setBrandName("");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const showAlertsSection = mode === "alerts-only" || mode === "both";
+  const showSlaSection = mode === "sla-only" || mode === "both";
+
+  return (
+    <div className="space-y-5" id="alert-tracker-container">
+      {showAlertsSection && (
+        <div className={mode === "alerts-only" ? "space-y-4" : "grid grid-cols-1 lg:grid-cols-3 gap-4"}>
+          {/* 1. 발생 알림 내역 (가장 먼저 확인해야 하므로 드로어 상단 배치) */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex flex-col">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <ShieldAlert className="w-4 h-4 text-amber-500" />
+                실시간 감지 알림
+                {unreadCount > 0 && (
+                  <span className="bg-[#98B941] text-white text-xs px-2 py-0.5 rounded-full font-extrabold">
+                    {unreadCount}
+                  </span>
+                )}
+              </h3>
+              {safeTriggeredAlerts.length > 0 && (
+                <button
+                  onClick={onClearTriggered}
+                  className="text-xs text-gray-500 hover:text-gray-800 underline cursor-pointer font-semibold"
+                >
+                  전체 비우기
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1 mt-2">
+              {safeTriggeredAlerts.length === 0 ? (
+                <div className="text-center py-8 text-xs text-gray-400 font-medium">
+                  아직 발생한 트렌드 변동 알림이 없습니다.
+                </div>
+              ) : (
+                safeTriggeredAlerts.map((log) => (
+                  <div
+                    key={log.id}
+                    className={`p-3 rounded-lg border transition-all ${
+                      log.isRead ? "bg-gray-50 border-gray-200 opacity-70" : "bg-[#98B941]/10 border-[#98B941]/30"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <p className={`text-xs leading-relaxed ${log.isRead ? "text-gray-600" : "text-gray-900 font-bold"}`}>
+                          {log.message}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium">
+                          <span>{log.alertName}</span>
+                          <span>·</span>
+                          <span>{new Date(log.timestamp).toLocaleTimeString("ko-KR")}</span>
+                        </div>
+                      </div>
+                      {!log.isRead && (
+                        <button
+                          onClick={() => onMarkAsRead(log.id)}
+                          className="text-[#7a9630] hover:text-[#607824] text-xs font-bold whitespace-nowrap cursor-pointer flex items-center gap-1 shrink-0"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          읽음
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* 2. 새 알림 규칙 추가 */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs">
+            <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-1.5">
+              <Settings className="w-4 h-4 text-[#98B941]" />
+              맞춤 알림 규칙 추가
+            </h3>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1">규칙 이름</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="예: 선케어 자사 브랜드 TOP 5 진입"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full text-xs border border-gray-300 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-[#98B941]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">감시 카테고리</label>
+                  <select
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
+                    className="w-full text-xs border border-gray-300 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-[#98B941]"
+                  >
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">감지 조건</label>
+                  <select
+                    value={conditionType}
+                    onChange={(e) => setConditionType(e.target.value as any)}
+                    className="w-full text-xs border border-gray-300 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-[#98B941]"
+                  >
+                    <option value="first_place_change">1위 상품 변동</option>
+                    <option value="brand_mention">특정 브랜드 진입</option>
+                    <option value="rank_entry">신규(NEW) 차트 진입</option>
+                  </select>
+                </div>
+              </div>
+
+              {conditionType === "brand_mention" && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 mb-1">추적할 브랜드명</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="예: 토리든, 아누아"
+                    value={brandName}
+                    onChange={(e) => setBrandName(e.target.value)}
+                    className="w-full text-xs border border-gray-300 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-[#98B941]"
+                  />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-[#98B941] hover:bg-[#85a337] text-white text-xs font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:bg-gray-300"
+              >
+                <Plus className="w-4 h-4" />
+                {isSubmitting ? "등록 중..." : "알림 규칙 저장"}
+              </button>
+            </form>
+          </div>
+
+          {/* 3. 활성 규칙 목록 */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs">
+            <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-1.5">
+              <Bell className="w-4 h-4 text-[#98B941]" />
+              활성 알림 규칙 ({safeAlerts.length})
+            </h3>
+            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+              {safeAlerts.length === 0 ? (
+                <div className="text-center py-6 text-xs text-gray-400">등록된 알림 규칙이 없습니다.</div>
+              ) : (
+                safeAlerts.map((rule) => {
+                  const catName = categories.find((c) => c.id === rule.categoryId)?.name || rule.categoryId;
+                  return (
+                    <div
+                      key={rule.id}
+                      className="p-3 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-between gap-3"
+                    >
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-800">{rule.name}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          <span className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded font-semibold">
+                            {catName}
+                          </span>
+                          <span className="text-xs bg-[#98B941]/15 text-[#7a9630] px-2 py-0.5 rounded font-bold">
+                            {rule.conditionType === "first_place_change"
+                              ? "1위 변동"
+                              : rule.conditionType === "brand_mention"
+                              ? `브랜드 진입 (${rule.brandName})`
+                              : "신규 진입"}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onDeleteAlert(rule.id)}
+                        className="text-gray-400 hover:text-red-500 p-1 rounded transition-colors cursor-pointer"
+                        title="규칙 삭제"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. SLA 스크래퍼 품질 및 데이터 규격 모니터링 콘솔 */}
+      {showSlaSection && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs" id="scraper-monitoring-console-card">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-200 pb-4 mb-4">
+            <div className="space-y-1">
+              <h3 className="text-base font-extrabold text-gray-900 flex items-center gap-2">
+                <Database className="w-5 h-5 text-[#98B941]" />
+                스크래핑 데이터 품질 관리 (SLA) 콘솔
+              </h3>
+              <p className="text-xs text-gray-500">
+                수집된 TOP 30 상품의 브랜드 매핑, 할인가 역전 여부, 누락 필드를 자동 검증합니다.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {onTriggerTestLogs && (
+                <button
+                  type="button"
+                  disabled={isSimulatingLogs}
+                  onClick={async () => {
+                    setIsSimulatingLogs(true);
+                    try {
+                      await onTriggerTestLogs();
+                    } finally {
+                      setIsSimulatingLogs(false);
+                    }
+                  }}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 text-[#98B941] fill-current" />
+                  검증 오류 테스트 생성
+                </button>
+              )}
+              {onResolveAllMonitoringLogs && monitoringLogs.some((l) => l.status !== "resolved") && (
+                <button
+                  type="button"
+                  onClick={onResolveAllMonitoringLogs}
+                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer border border-emerald-200"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  미해결 로그 일괄 해결
+                </button>
+              )}
+              {onClearMonitoringLogs && monitoringLogs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={onClearMonitoringLogs}
+                  className="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash className="w-3.5 h-3.5" />
+                  로그 초기화
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* SLA 요약 배너 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 mb-5">
+            <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3.5 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-xs font-semibold text-gray-500 block">파이프라인 상태</span>
+                <span className="text-sm font-extrabold text-emerald-900">
+                  {monitoringLogs.filter((l) => l.status !== "resolved" && l.level === "error").length > 0
+                    ? "점검 필요 (오류 감지됨)"
+                    : "정상 가동 중 (SLA 99.9%)"}
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3.5 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-amber-500 text-white flex items-center justify-center font-extrabold text-sm">
+                !
+              </div>
+              <div>
+                <span className="text-xs font-semibold text-gray-500 block">데이터 포맷·가격 경고</span>
+                <span className="text-sm font-extrabold text-amber-900">
+                  {
+                    monitoringLogs.filter(
+                      (l) => l.status !== "resolved" && (l.errorType === "format_mismatch" || l.errorType === "invalid_value")
+                    ).length
+                  }
+                  건
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-red-50/60 border border-red-200 rounded-xl p-3.5 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-red-500 text-white flex items-center justify-center font-extrabold text-sm">
+                X
+              </div>
+              <div>
+                <span className="text-xs font-semibold text-gray-500 block">필수 데이터 누락</span>
+                <span className="text-sm font-extrabold text-red-900">
+                  {monitoringLogs.filter((l) => l.status !== "resolved" && l.errorType === "missing_data").length}건
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 로그 리스트 */}
+          <div className="border border-gray-200 rounded-xl overflow-hidden">
+            <div className="divide-y divide-gray-200 max-h-[460px] overflow-y-auto">
+              {monitoringLogs.length === 0 ? (
+                <div className="text-center py-16 text-sm text-gray-500 font-semibold bg-white">
+                  <ShieldCheck className="w-8 h-8 text-[#98B941] mx-auto mb-2" />
+                  모든 상품 데이터가 규격 검증을 통과했습니다.
+                </div>
+              ) : (
+                monitoringLogs.map((log) => {
+                  const isExpanded = expandedLogId === log.id;
+                  const isResolved = log.status === "resolved";
+                  const categoryLabel = categories.find((c) => c.id === log.category)?.name || log.category;
+
+                  return (
+                    <div
+                      key={log.id}
+                      className={`p-4 transition-colors ${
+                        isResolved ? "bg-gray-50 opacity-70 border-l-4 border-emerald-500" : "bg-white hover:bg-gray-50"
+                      }`}
+                    >
+                      <div
+                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                        className="flex items-start justify-between gap-3 cursor-pointer"
+                      >
+                        <div className="space-y-1.5 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
+                                isResolved
+                                  ? "bg-emerald-600 text-white"
+                                  : log.level === "error"
+                                  ? "bg-red-500 text-white"
+                                  : "bg-amber-500 text-white"
+                              }`}
+                            >
+                              {isResolved ? "해결됨" : log.level}
+                            </span>
+                            <span className="text-xs bg-gray-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded font-semibold">
+                              {categoryLabel} · {log.mallType === "domestic" ? "국내몰" : "글로벌몰"}
+                            </span>
+                            <span className="text-xs text-gray-400">
+                              {new Date(log.timestamp).toLocaleTimeString("ko-KR")}
+                            </span>
+                          </div>
+                          <p className={`text-sm font-bold ${isResolved ? "text-gray-500 line-through" : "text-gray-900"}`}>
+                            {log.message}
+                          </p>
+                        </div>
+
+                        {!isResolved && onResolveMonitoringLog && (
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              await onResolveMonitoringLog(log.id);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            해결 처리
+                          </button>
+                        )}
+                      </div>
+
+                      {isExpanded && log.details && (
+                        <div className="mt-3 p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-xs text-gray-700">
+                          <strong className="text-amber-900 block mb-0.5">상세 검증 내역:</strong>
+                          {log.details}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+```
+
+다음으로 **올리브영 보안 프로그램(Cloudflare)을 우회하여 실제 데이터를 수집하는 외부 API(ZenRows/ScrapingBee 및 네이버 쇼핑 검색 API) 연동 코드**도 바로 이어서 작성해 드릴까요?

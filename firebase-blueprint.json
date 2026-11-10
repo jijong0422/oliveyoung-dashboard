@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "report": {
+      "title": "Saved Report",
+      "description": "Saved intelligence product strategy and marketing report",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "authorName": { "type": "string" },
+        "departmentName": { "type": "string" },
+        "reportDate": { "type": "string" },
+        "confidentialGrade": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "sourceType": { "type": "string" },
+        "sourceRunId": { "type": "string" },
+        "executiveSummary": { "type": "string" },
+        "strategicStrategy": { "type": "string" },
+        "recommendations": { "type": "array" },
+        "metrics": { "type": "object" },
+        "chartBrandData": { "type": "array" },
+        "chartPriceData": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "title", "executiveSummary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/reports/{reportId}": {
+      "schema": "report",
+      "description": "Collection of saved intelligence reports"
+    }
+  }
+}

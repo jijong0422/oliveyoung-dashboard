@@ -1,0 +1,6 @@
+{
+  "name": "올리브영 국내-글로벌 트렌드 분석 대시보드",
+  "description": "올리브영 국내외 몰의 카테고리별 실시간 TOP 30 랭킹 데이터를 수집, 분석하여 글로벌 트렌드 비교 및 MD 상품 기획 인사이트를 제공하는 대시보드",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

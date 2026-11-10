@@ -1,0 +1,666 @@
+7년차 뷰티 MD의 실무 워크플로우(시장 조사 → 타깃 단가·용량 세팅 → 손익 시뮬레이션 → 품의서 작성)와 현재 `v2.0 SLIM` 코드의 한계점을 대조하여 발굴한 **5가지 추가 개선 포인트**와, 그중 즉시 코드에 반영했을 때 실무 임팩트가 가장 큰 **핵심 3가지 포인트**입니다.
+
+---
+
+### 1. 7년차 뷰티 MD 관점의 추가 개선 포인트 5가지
+
+* **포인트 ①: `ChartsBoard.tsx`의 미사용 시계열 데이터(`historicalData`) 시각화 누락 해결**
+* **현황 및 문제점**: `App.tsx`에서 `/api/rankings/history`를 호출해 최근 6회차 순위 변동 데이터(`historicalData`)를 `ChartsBoard.tsx`에 Props로 넘겨주고 있지만, 정작 `ChartsBoard.tsx` 내부에서는 이 변수를 아예 받아서 쓰지 않고 버리고 있습니다. 또한 가격 비교 차트가 최대 기준값을 `50,000원` 하나의 막대로만 표현해, 정작 MD가 가장 중요하게 보는 가격대별 SKU 밀집도(1만 원대 vs 2만 원대 경쟁 강도)를 알 수 없습니다.
+
+
+
+
+* **포인트 ②: `ReportBuilder.tsx`에 '올리브영 입점 마진·원가(COGS) 역산 시뮬레이터' 부재**
+* **현황 및 문제점**: 현재 실무 상품기획서(PRD) 탭은 경쟁사 중위가와 평균 할인율만 요약해 줄 뿐, MD가 제조사(OEM/ODM)와 단가 협상을 할 때 필수적인 **유통 수수료(올리브영 마진율 약 35~55%), 부가세(10%), 올영세일 추가 분담금, 목표 제조원가(COGS) 상한선**을 계산해 주지 못합니다.
+
+
+
+
+* **포인트 ③: 국내몰 vs 글로벌몰 'Cross-Border 소싱 갭(White-Space)' 자동 매칭 부재**
+* **현황 및 문제점**: `RankingBoard.tsx`에서 국내몰 30개와 글로벌몰 30개를 나란히 보여주기만 할 뿐, 두 리스트의 브랜드 교집합·차집합을 분석하지 않습니다. "국내에선 이미 검증된 TOP 15 브랜드인데 글로벌 차트엔 아직 없는 브랜드(수출/역직구 확장 타깃)"와 "글로벌에서만 팬덤이 터진 역수입/외국인 특화 타깃"을 자동으로 발라내 주어야 실무 소싱 리스트가 나옵니다.
+
+
+
+
+* **포인트 ④: 상품명 기반 '성분·효능 소구 키워드(Claim Tag) 점유율' 자동 집계 부재**
+* **현황 및 문제점**: 현재 `types.ts`에 `ingredients` 필드가 정의되어 있으나 실제 분석에는 쓰이지 않습니다. TOP 30 상품명에서 핵심 성분(시카/어성초, 히알루론산, 비타민/잡티, 레티놀/콜라겐/탄력 등)의 등장 빈도를 실시간 집계해 주면 "현재 스킨케어 매대는 수분(40%)보다 장벽/진정(55%) 키워드가 지배하고 있다"는 명확한 품의 근거가 됩니다.
+
+
+
+
+* **포인트 ⑤: `AIAdvisor.tsx`의 단방향 분석 구조 (자사 타깃 조건 주입 불가)**
+* **현황 및 문제점**: 현재 AI 어드바이저는 카테고리만 선택하면 고정된 프롬프트로 일반론적인 요약만 출력합니다. MD가 기획 중인 "타깃 제형(예: 패드), 목표 소비자가(예: 18,000원), 핵심 성분(예: 판테놀)"을 한 줄로 입력해 현재 TOP 10 경쟁작들과 정면 승부했을 때의 승산과 차별화 포인트를 진단받는 인터랙티브 입력창이 필요합니다.
+
+
+
+
+
+---
+
+### 2. 지금 바로 적용할 핵심 포인트 3가지 선정 및 구현 코드
+
+위 5가지 중 별도의 외부 라이브러리 설치나 백엔드 DB 구조 변경 없이 프론트엔드 코드 교체만으로 즉시 작동하며, MD 실무 가치를 극대화하는 3가지(포인트 ①, ②, ③)를 선정했습니다.
+
+* **선정 1 (`RankingBoard.tsx`)**: **국내 vs 글로벌 Cross-Border 기회 탐색기 & 핵심 성분 키워드 점유율 바** 추가 (포인트 ③+④ 결합)
+* **선정 2 (`ChartsBoard.tsx`)**: 버려지던 **`historicalData`를 활용한 'TOP 5 브랜드 순위 변동 추이(Bump Chart)'** 및 **'가격 구간별 SKU 분포 차트'** 추가 (포인트 ① 해결)
+* **선정 3 (`ReportBuilder.tsx`)**: **'올리브영 입점 마진 & 제조원가(COGS) 역산 시뮬레이터'** 추가 (포인트 ② 해결)
+
+---
+
+#### 적용 1: `src/components/RankingBoard.tsx` (국내·글로벌 소싱 갭 & 성분 키워드 점유율 배너 추가)
+
+기존 `RankingBoard.tsx`의 상단 필터 바와 리스트 사이에 실측 데이터 기반의 'MD 소싱 기회 & 트렌드 키워드 요약 바'를 추가합니다. `RankingBoard.tsx` 내 `filteredGlobal` 선언 아래에 아래 분석 로직(`mdQuickInsights`)을 넣고 렌더링 영역에 배너를 추가하세요.
+
+```tsx
+// src/components/RankingBoard.tsx 내 filteredGlobal 선언(115행 부근) 바로 아래에 추가
+  const mdQuickInsights = React.useMemo(() => {
+    const domBrands = new Set(domesticProducts.map((p) => p.brand));
+    const globBrands = new Set(globalProducts.map((p) => p.brand));
+
+    // 국내 TOP 15 브랜드 중 글로벌 TOP 30에 아직 진입하지 못한 '글로벌 확장 유망 브랜드'
+    const domOnlyTopBrands = Array.from(
+      new Set(
+        domesticProducts
+          .slice(0, 15)
+          .map((p) => p.brand)
+          .filter((b) => !globBrands.has(b))
+      )
+    ).slice(0, 4);
+
+    // 글로벌 TOP 15 브랜드 중 국내 TOP 30에 없는 '해외 전용/역직구 강세 브랜드'
+    const globOnlyTopBrands = Array.from(
+      new Set(
+        globalProducts
+          .slice(0, 15)
+          .map((p) => p.brand)
+          .filter((b) => !domBrands.has(b))
+      )
+    ).slice(0, 4);
+
+    // 국내+글로벌 60개 상품명 내 주요 성분/효능 키워드 빈도 실측
+    const allNames = [...domesticProducts, ...globalProducts].map((p) => p.name.toLowerCase());
+    const keywordRules = [
+      { label: "수분/히알루론", regex: /수분|히알루론|다이브인|독도|자작나무|hyaluronic|moisture|birch|dokdo/ },
+      { label: "진정/시카/어성초", regex: /진정|시카|어성초|티트리|마데카|cica|heartleaf|teatree|calming|soothing/ },
+      { label: "장벽/보습/세라마이드", regex: /장벽|아토|세라마이드|보습|크림|ceramide|atobarrier|barrier|cream/ },
+      { label: "미백/비타/잡티", regex: /비타|청귤|잡티|미백|토닝|화이트|vita|tangerine|bright|spot/ },
+      { label: "탄력/콜라겐/레티놀", regex: /콜라겐|레티놀|탄력|리프팅|단백질|손상|collagen|retinol|damage|repair/ }
+    ];
+
+    const keywordCounts = keywordRules
+      .map((rule) => ({
+        label: rule.label,
+        count: allNames.filter((name) => rule.regex.test(name)).length
+      }))
+      .filter((k) => k.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    return { domOnlyTopBrands, globOnlyTopBrands, keywordCounts };
+  }, [domesticProducts, globalProducts]);
+
+```
+
+그리고 같은 파일(`RankingBoard.tsx`)의 상단 필터 바(`</div>`) 바로 아래, 2단 비교 보드 바로 위에 아래 JSX 블록을 삽입합니다:
+
+```tsx
+      {/* MD 실무 인사이트 요약 바: 국내·글로벌 소싱 갭(Gap) 및 핵심 소구 키워드 분포 */}
+      {!isLoading && domesticProducts.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+          <div className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-xs space-y-1.5">
+            <span className="text-[11px] font-extrabold text-[#7a9630] bg-[#98B941]/15 px-2 py-0.5 rounded inline-block">
+              🎯 글로벌 확장 유망 (국내 강세 · 글로벌 미진입)
+            </span>
+            <p className="text-xs font-bold text-gray-900">
+              {mdQuickInsights.domOnlyTopBrands.length > 0
+                ? mdQuickInsights.domOnlyTopBrands.join(", ")
+                : "국내 상위권 브랜드 대다수 글로벌 동시 진입 중"}
+            </p>
+            <p className="text-[11px] text-gray-500">
+              국내 TOP 15 검증 완료 후 글로벌몰 30위권 외에 머물러 있는 역직구 육성 타깃입니다.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-xs space-y-1.5">
+            <span className="text-[11px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded inline-block">
+              🌍 해외 팬덤 특화 (글로벌 강세 · 국내 차트 외)
+            </span>
+            <p className="text-xs font-bold text-gray-900">
+              {mdQuickInsights.globOnlyTopBrands.length > 0
+                ? mdQuickInsights.globOnlyTopBrands.join(", ")
+                : "글로벌·국내 상위 브랜드 동조화 현상 강함"}
+            </p>
+            <p className="text-[11px] text-gray-500">
+              해외 직구 및 방한 외국인 관광 상권(명동·성수·홍대) 전용 매대 구성 시 유리한 브랜드입니다.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-xs space-y-1.5">
+            <span className="text-[11px] font-extrabold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded inline-block">
+              🧪 현재 카테고리 핵심 소구 키워드 TOP 3
+            </span>
+            <div className="flex flex-wrap gap-1.5 pt-0.5">
+              {mdQuickInsights.keywordCounts.slice(0, 3).map((kw, i) => (
+                <span
+                  key={kw.label}
+                  className="text-xs font-extrabold text-gray-800 bg-gray-100 px-2 py-0.5 rounded"
+                >
+                  {i + 1}위 {kw.label} ({kw.count}개 SKU)
+                </span>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-500">
+              국내·글로벌 60개 상품명에서 실측된 최다 빈출 효능·성분 클레임입니다.
+            </p>
+          </div>
+        </div>
+      )}
+
+```
+
+---
+
+#### 적용 2: `src/components/ChartsBoard.tsx` (`historicalData` 기반 시계열 순위 추이 차트 & 가격대 분포 차트 완성)
+
+기존에 Props로만 받고 쓰지 않던 `historicalData`를 활용해 **시간대별 TOP 5 제품의 순위 변동 궤적**을 그리고, 단순 평균 막대 대신 **가격 구간별(1만 원대, 2만 원대 등) 국내 vs 글로벌 SKU 분포 바 차트**를 추가한 `src/components/ChartsBoard.tsx` 전체 교체 코드입니다.
+
+```tsx
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import React, { useState, useEffect, useMemo } from "react";
+import { Search, BarChart3, Sparkles, ArrowUpRight, Layers, Activity } from "lucide-react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend
+} from "recharts";
+import { Category, Product } from "../types";
+
+interface ChartsBoardProps {
+  categories: Category[];
+  selectedCategory: string;
+  setSelectedCategory: (cat: string) => void;
+  domesticProducts: Product[];
+  globalProducts: Product[];
+  historicalData: { timestamp: string; products: Product[] }[];
+}
+
+function calcSafeTop10AvgPrice(products: Product[]): number {
+  if (!Array.isArray(products) || products.length === 0) return 0;
+  const top10 = products.slice(0, 10);
+  const sum = top10.reduce((acc, p) => acc + (Number(p.price) || 0), 0);
+  return Math.round(sum / top10.length);
+}
+
+const LINE_COLORS = ["#98B941", "#0284c7", "#f59e0b", "#8b5cf6", "#ec4899"];
+
+export default function ChartsBoard({
+  categories,
+  selectedCategory,
+  setSelectedCategory,
+  domesticProducts,
+  globalProducts,
+  historicalData
+}: ChartsBoardProps) {
+  const [searchTrendData, setSearchTrendData] = useState<Array<{ period: string; ratio: number }>>([]);
+  const [isLoadingTrend, setIsLoadingTrend] = useState(false);
+  const [isSimulatedTrend, setIsSimulatedTrend] = useState(false);
+
+  const [inputKeyword, setInputKeyword] = useState("수분세럼");
+  const [activeKeyword, setActiveKeyword] = useState("수분세럼");
+
+  useEffect(() => {
+    const catObj = categories.find((c) => c.id === selectedCategory);
+    const nextKeyword = catObj && catObj.id !== "all" ? catObj.name : "올리브영 추천";
+    setInputKeyword(nextKeyword);
+    setActiveKeyword(nextKeyword);
+  }, [selectedCategory, categories]);
+
+  useEffect(() => {
+    if (!activeKeyword.trim()) return;
+    let isMounted = true;
+
+    const fetchDatalabTrend = async () => {
+      setIsLoadingTrend(true);
+      try {
+        const res = await fetch("/api/naver/datalab", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keyword: activeKeyword })
+        });
+        const data = await res.json();
+        if (!isMounted) return;
+
+        setIsSimulatedTrend(Boolean(data.isSimulated));
+        if (Array.isArray(data.results) && Array.isArray(data.results[0]?.data)) {
+          setSearchTrendData(data.results[0].data);
+        } else {
+          setSearchTrendData([]);
+        }
+      } catch (err) {
+        if (isMounted) setSearchTrendData([]);
+      } finally {
+        if (isMounted) setIsLoadingTrend(false);
+      }
+    };
+
+    fetchDatalabTrend();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeKeyword]);
+
+  const handleKeywordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inputKeyword.trim()) {
+      setActiveKeyword(inputKeyword.trim());
+    }
+  };
+
+  // 1. 가격 구간별(Price Band) 국내 vs 글로벌 SKU 밀집도 데이터 산출
+  const priceBandData = useMemo(() => {
+    const bands = [
+      { name: "1.5만원 미만", min: 0, max: 14999 },
+      { name: "1.5만~2.5만", min: 15000, max: 24999 },
+      { name: "2.5만~3.5만", min: 25000, max: 34999 },
+      { name: "3.5만원 이상", min: 35000, max: Infinity }
+    ];
+    return bands.map((b) => ({
+      name: b.name,
+      국내몰: domesticProducts.filter((p) => p.price >= b.min && p.price <= b.max).length,
+      글로벌몰: globalProducts.filter((p) => p.price >= b.min && p.price <= b.max).length
+    }));
+  }, [domesticProducts, globalProducts]);
+
+  // 2. 방치되어 있던 historicalData를 활용한 현재 TOP 5 브랜드의 시계열 순위 변화(Bump Chart) 데이터
+  const top5Products = useMemo(() => domesticProducts.slice(0, 5), [domesticProducts]);
+  const rankTimelineData = useMemo(() => {
+    if (!Array.isArray(historicalData) || historicalData.length === 0 || top5Products.length === 0) {
+      return [];
+    }
+    return historicalData.map((snap) => {
+      const d = new Date(snap.timestamp);
+      const timeLabel = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}시`;
+      const row: Record<string, any> = { time: timeLabel };
+
+      top5Products.forEach((targetProd) => {
+        const key = `[${targetProd.brand}] ${targetProd.name.slice(0, 10)}`;
+        const matched = snap.products?.find(
+          (p) => p.id === targetProd.id || (p.brand === targetProd.brand && p.name === targetProd.name)
+        );
+        row[key] = matched ? matched.rank : 30;
+      });
+      return row;
+    });
+  }, [historicalData, top5Products]);
+
+  const domAvgPrice = calcSafeTop10AvgPrice(domesticProducts);
+  const globAvgPrice = calcSafeTop10AvgPrice(globalProducts);
+  const priceGapPercent =
+    domAvgPrice > 0 ? Math.round(((globAvgPrice - domAvgPrice) / domAvgPrice) * 100) : 0;
+
+  return (
+    <div className="space-y-5" id="charts-board-container">
+      {/* 상단 컨트롤러 */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-[#98B941]" />
+          <div>
+            <h2 className="text-base font-extrabold text-gray-900">올리브영 랭킹 & 소비자 검색 수요 교차 분석</h2>
+            <p className="text-xs text-gray-500">포털 검색량, 가격대별 SKU 밀집도, 상위권 순위 변동 추이를 다각도로 진단합니다.</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg">
+            <span className="text-xs font-bold text-gray-500">카테고리:</span>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="bg-transparent text-xs font-bold text-gray-900 focus:outline-none cursor-pointer"
+            >
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <form onSubmit={handleKeywordSubmit} className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 pl-3 pr-1.5 py-1 rounded-lg">
+            <Search className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            <input
+              type="text"
+              value={inputKeyword}
+              onChange={(e) => setInputKeyword(e.target.value)}
+              placeholder="트렌드 키워드 검색"
+              className="bg-transparent text-xs font-bold text-gray-900 focus:outline-none w-32"
+            />
+            <button
+              type="submit"
+              className="bg-[#98B941] hover:bg-[#85a337] text-white text-xs font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+            >
+              조회
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {/* 상단 2단 차트: 1. 네이버 검색 트렌드 + 2. 가격 구간별 SKU 밀집도 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs space-y-4 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <span>'{activeKeyword}' 네이버 검색 트렌드 추이</span>
+                <ArrowUpRight className="w-4 h-4 text-[#98B941]" />
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">최고 검색량(100) 대비 기간별 상대적 관심도 지수입니다.</p>
+            </div>
+            <span
+              className={`text-xs font-bold px-2.5 py-1 rounded-md shrink-0 ${
+                isSimulatedTrend
+                  ? "bg-amber-50 text-amber-700 border border-amber-200"
+                  : "bg-[#98B941]/15 text-[#7a9630]"
+              }`}
+            >
+              {isSimulatedTrend ? "시뮬레이션 지수" : "DataLab 실시간"}
+            </span>
+          </div>
+
+          <div className="w-full h-[240px]">
+            {isLoadingTrend ? (
+              <div className="h-full flex items-center justify-center text-xs text-gray-400 font-semibold animate-pulse">
+                네이버 데이터랩 트렌드 지수 분석 중...
+              </div>
+            ) : searchTrendData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-xs text-gray-400">
+                표시할 트렌드 데이터가 없습니다.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={searchTrendData} margin={{ top: 10, right: 12, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="period" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#ffffff",
+                      borderRadius: "8px",
+                      border: "1px solid #e2e8f0",
+                      fontSize: "12px",
+                      fontWeight: 700
+                    }}
+                    formatter={(value: any) => [`${value} pt`, "검색 관심도"]}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ratio"
+                    stroke="#98B941"
+                    strokeWidth={3}
+                    dot={{ r: 3, fill: "#98B941" }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {/* 가격대 구간별 SKU 분포 바 차트 (레드오션 vs 블루오션 가격대 식별) */}
+        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs space-y-4 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-[#98B941]" />
+                <span>가격 구간별 TOP 30 SKU 밀집도 (Price Band)</span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                국내 평균 {domAvgPrice.toLocaleString()}원 vs 글로벌 평균 {globAvgPrice.toLocaleString()}원 ({priceGapPercent >= 0 ? `+${priceGapPercent}%` : `${priceGapPercent}%`})
+              </p>
+            </div>
+          </div>
+
+          <div className="w-full h-[240px]">
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={priceBandData} margin={{ top: 10, right: 12, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#ffffff",
+                    borderRadius: "8px",
+                    border: "1px solid #e2e8f0",
+                    fontSize: "12px"
+                  }}
+                  formatter={(value: any) => [`${value}개 SKU`, ""]}
+                />
+                <Legend wrapperStyle={{ fontSize: "12px", fontWeight: 700 }} />
+                <Bar dataKey="국내몰" fill="#98B941" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="글로벌몰" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* 하단 차트: historicalData 기반 국내 TOP 5 시계열 순위 변동 추적기 */}
+      {rankTimelineData.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs space-y-4 min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <Activity className="w-4 h-4 text-[#98B941]" />
+                <span>국내몰 최상위 TOP 5 시계열 순위 변동 궤적 (최근 {rankTimelineData.length}회 스냅샷)</span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                상위 5개 제품의 순위 고착화 여부 및 급등 시점을 추적합니다 (1위가 상단에 위치).
+              </p>
+            </div>
+          </div>
+
+          <div className="w-full h-[260px]">
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={rankTimelineData} margin={{ top: 10, right: 20, left: -15, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="time" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                <YAxis
+                  stroke="#94a3b8"
+                  fontSize={11}
+                  tickLine={false}
+                  reversed
+                  domain={[1, "auto"]}
+                  tickFormatter={(v) => `${v}위`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#ffffff",
+                    borderRadius: "8px",
+                    border: "1px solid #e2e8f0",
+                    fontSize: "12px"
+                  }}
+                  formatter={(val: any) => [`${val}위`, ""]}
+                />
+                <Legend wrapperStyle={{ fontSize: "11px", fontWeight: 700 }} />
+                {top5Products.map((p, idx) => {
+                  const key = `[${p.brand}] ${p.name.slice(0, 10)}`;
+                  return (
+                    <Line
+                      key={p.id}
+                      type="monotone"
+                      dataKey={key}
+                      stroke={LINE_COLORS[idx % LINE_COLORS.length]}
+                      strokeWidth={2.5}
+                      dot={{ r: 3 }}
+                    />
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+```
+
+---
+
+#### 적용 3: `src/components/ReportBuilder.tsx` ('올리브영 입점 마진 & 제조원가(COGS) 역산 시뮬레이터' 섹션 추가)
+
+`ReportBuilder.tsx` 내부에서 MD가 목표 판매가, 올리브영 유통 수수료율(기본 45%), 목표 제조원가율(기본 20%)을 조절하면 **공급가(부가세 제외), 유통 수수료, 제조원가 상한선(COGS), 예상 영업이익**이 실시간으로 계산되어 기획서 PDF에 함께 인쇄되도록 추가합니다.
+
+`src/components/ReportBuilder.tsx` 상단 `useState` 선언부(38행 부근)에 아래 상태 3개를 추가하세요:
+
+```tsx
+  // MD 실무 손익(P&L) 및 원가 역산 시뮬레이터 상태
+  const [targetRetailPrice, setTargetRetailPrice] = useState<number>(0);
+  const [channelMarginRate, setChannelMarginRate] = useState<number>(45); // 올리브영 평균 수수료율 45%
+  const [targetCogsRate, setTargetCogsRate] = useState<number>(22); // 공급가 대비 제조원가율 22%
+
+```
+
+그리고 `factMetrics` 아래에 아래 손익 계산식(`pnlSim`)을 추가합니다:
+
+```tsx
+  const pnlSim = useMemo(() => {
+    const retailPrice = targetRetailPrice > 0 ? targetRetailPrice : factMetrics.medianDomPrice || 18000;
+    const vatExcludedPrice = Math.round(retailPrice / 1.1); // 부가세 10% 제외 실결제가
+    const channelFee = Math.round(vatExcludedPrice * (channelMarginRate / 100)); // 올리브영 유통 수수료
+    const brandSupplyPrice = vatExcludedPrice - channelFee; // 브랜드 정산 공급가(입고가)
+    const maxRecommendedCogs = Math.round(brandSupplyPrice * (targetCogsRate / 100)); // 권장 제조원가(내용물+부자재) 상한선
+    const grossProfitPerUnit = brandSupplyPrice - maxRecommendedCogs; // 개당 매출총이익(마케팅비/물류비 집행 재원)
+
+    return {
+      retailPrice,
+      vatExcludedPrice,
+      channelFee,
+      brandSupplyPrice,
+      maxRecommendedCogs,
+      grossProfitPerUnit
+    };
+  }, [targetRetailPrice, channelMarginRate, targetCogsRate, factMetrics.medianDomPrice]);
+
+```
+
+마지막으로 `ReportBuilder.tsx`의 **섹션 3(`3. 실측 데이터 기반 신상품 MD 기획 명세서`) 바로 아래**에 아래 시뮬레이터 섹션을 넣으면 품의서 완성도가비약적으로 높아집니다:
+
+```tsx
+            {/* 섹션 3-2: 올리브영 입점 손익(P&L) 및 목표 제조원가(COGS) 역산 시뮬레이터 */}
+            <section className="space-y-3">
+              <h2 className="text-sm font-extrabold text-gray-900 flex items-center gap-2 border-l-4 border-[#98B941] pl-2.5">
+                <PackageCheck className="w-4 h-4 text-[#98B941]" />
+                4. 올리브영 입점 마진 구조 및 목표 제조원가(COGS) 역산 시뮬레이션
+              </h2>
+
+              {/* 시뮬레이션 슬라이더 컨트롤 (인쇄 시에는 깔끔하게 수치만 보이도록 print:hidden) */}
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-3 gap-4 print:hidden">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    목표 실판매가 설정 (원)
+                  </label>
+                  <input
+                    type="number"
+                    step={500}
+                    value={pnlSim.retailPrice}
+                    onChange={(e) => setTargetRetailPrice(Number(e.target.value))}
+                    className="w-full text-xs font-extrabold border border-gray-300 rounded-lg px-3 py-2 bg-white"
+                  />
+                  <span className="text-[11px] text-gray-500 mt-1 block">
+                    기본값: 카테고리 중위가 ({factMetrics.medianDomPrice.toLocaleString()}원)
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    올리브영 유통 수수료율: <span className="text-[#7a9630]">{channelMarginRate}%</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={30}
+                    max={60}
+                    value={channelMarginRate}
+                    onChange={(e) => setChannelMarginRate(Number(e.target.value))}
+                    className="w-full accent-[#98B941] cursor-pointer mt-2"
+                  />
+                  <span className="text-[11px] text-gray-500 block">
+                    일반 입점 40~50% / 단독 기획·특가 시 상향
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    정산 공급가 대비 목표 원가율: <span className="text-blue-600">{targetCogsRate}%</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={10}
+                    max={45}
+                    value={targetCogsRate}
+                    onChange={(e) => setTargetCogsRate(Number(e.target.value))}
+                    className="w-full accent-blue-600 cursor-pointer mt-2"
+                  />
+                  <span className="text-[11px] text-gray-500 block">
+                    OEM/ODM 제조원가(내용물+용기+단상자) 기준
+                  </span>
+                </div>
+              </div>
+
+              {/* 역산 결과 요약 테이블 (인쇄 포함) */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 text-xs">
+                <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                  <span className="text-gray-500 font-semibold block">① 목표 실판매가</span>
+                  <span className="text-sm font-black text-gray-900 mt-1 block">
+                    {pnlSim.retailPrice.toLocaleString()}원
+                  </span>
+                  <span className="text-[10px] text-gray-400">VAT 제외 {pnlSim.vatExcludedPrice.toLocaleString()}원</span>
+                </div>
+
+                <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                  <span className="text-gray-500 font-semibold block">② 유통 수수료 ({channelMarginRate}%)</span>
+                  <span className="text-sm font-black text-red-600 mt-1 block">
+                    -{pnlSim.channelFee.toLocaleString()}원
+                  </span>
+                  <span className="text-[10px] text-gray-400">채널 마진 차감액</span>
+                </div>
+
+                <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                  <span className="text-gray-500 font-semibold block">③ 브랜드 정산 공급가</span>
+                  <span className="text-sm font-black text-gray-900 mt-1 block">
+                    {pnlSim.brandSupplyPrice.toLocaleString()}원
+                  </span>
+                  <span className="text-[10px] text-gray-400">매출 인식 기준액</span>
+                </div>
+
+                <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-lg">
+                  <span className="text-blue-800 font-bold block">④ 권장 제조원가 상한 (COGS)</span>
+                  <span className="text-sm font-black text-blue-900 mt-1 block">
+                    {pnlSim.maxRecommendedCogs.toLocaleString()}원 이하
+                  </span>
+                  <span className="text-[10px] text-blue-600">공급가의 {targetCogsRate}% 이내 타깃</span>
+                </div>
+
+                <div className="p-3 bg-[#98B941]/10 border border-[#98B941]/30 rounded-lg">
+                  <span className="text-[#607824] font-bold block">⑤ 개당 매출총이익 (GP)</span>
+                  <span className="text-sm font-black text-gray-900 mt-1 block">
+                    +{pnlSim.grossProfitPerUnit.toLocaleString()}원
+                  </span>
+                  <span className="text-[10px] text-gray-600">마케팅·물류비 집행 재원</span>
+                </div>
+              </div>
+            </section>
+
+```
+
+이 3가지를 적용하시면 소싱 브랜드 발굴(`RankingBoard`) → 가격대·순위 궤적 분석(`ChartsBoard`) → 원가·마진 시뮬레이션 및 품의서 인쇄(`ReportBuilder`)로 이어지는 뷰티 MD의 전체 실무 사이클이 하나의 대시보드 안에서 완성됩니다.

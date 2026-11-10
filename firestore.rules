@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(reportId) {
+      return isSignedIn() && (
+        resource == null || 
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    function isValidReport(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.title is string && data.title.size() <= 500
+        && data.executiveSummary is string && data.executiveSummary.size() <= 10000;
+    }
+
+    match /reports/{reportId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() 
+        && isValidId(reportId)
+        && incoming().userId == request.auth.uid
+        && isValidReport(incoming());
+      allow update: if isSignedIn() 
+        && isValidId(reportId)
+        && isOwner(reportId)
+        && incoming().userId == existing().userId
+        && isValidReport(incoming());
+      allow delete: if isSignedIn() 
+        && isOwner(reportId);
+    }
+  }
+}
