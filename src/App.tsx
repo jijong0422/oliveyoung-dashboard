@@ -19,6 +19,7 @@ import {
   X
 } from "lucide-react";
 import { Category, Product, ScrapeRun, CustomAlert, TriggeredAlert, MDInsight } from "./types";
+import { baselineProducts } from "./baselineProducts";
 import RankingBoard from "./components/RankingBoard";
 import ChartsBoard from "./components/ChartsBoard";
 import AIAdvisor from "./components/AIAdvisor";
@@ -69,37 +70,50 @@ export default function App() {
   const fetchMetadata = async () => {
     try {
       const [catRes, runRes] = await Promise.all([
-        fetch("/api/categories"),
-        fetch("/api/scrape-history")
+        fetch("/api/categories").catch(() => null),
+        fetch("/api/scrape-history").catch(() => null)
       ]);
+
+      if (!catRes || !catRes.ok) throw new Error("API Offline");
+
       const catData = await catRes.json();
       setCategories(Array.isArray(catData) ? catData : []);
 
-      const runData = await runRes.json();
+      const runData = runRes && runRes.ok ? await runRes.json() : [];
       if (Array.isArray(runData)) {
         setHistoryRuns(runData);
-        if (runData.length > 0 && !selectedTimestamp) {
-          setSelectedTimestamp(runData[0].timestamp);
-        }
+        if (runData.length > 0 && !selectedTimestamp) setSelectedTimestamp(runData[0].timestamp);
       }
     } catch (err) {
-      console.error("Error loading app metadata:", err);
+      console.warn("백엔드 API 연결 안됨. 로컬 더미 카테고리를 로드합니다.");
+      // Fallback: 백엔드가 없을 때 띄워줄 기본 카테고리
+      setCategories([
+        { id: "all", name: "전체" },
+        { id: "skincare", name: "스킨케어" },
+        { id: "makeup", name: "메이크업" }
+      ]);
+      const fallbackTime = new Date().toISOString();
+      setHistoryRuns([{ id: "local_run", timestamp: fallbackTime, isSimulated: true, categoriesScraped: 3 }]);
+      if (!selectedTimestamp) setSelectedTimestamp(fallbackTime);
     }
   };
 
   const fetchAlerts = async () => {
     try {
       const [alertRes, trigRes] = await Promise.all([
-        fetch("/api/alerts"),
-        fetch("/api/triggered-alerts")
+        fetch("/api/alerts").catch(() => null),
+        fetch("/api/triggered-alerts").catch(() => null)
       ]);
+      if (!alertRes || !alertRes.ok) throw new Error("API Offline");
+
       const alertData = await alertRes.json();
       setAlerts(Array.isArray(alertData) ? alertData : []);
 
-      const trigData = await trigRes.json();
+      const trigData = trigRes && trigRes.ok ? await trigRes.json() : [];
       setTriggeredAlerts(Array.isArray(trigData) ? trigData : []);
     } catch (err) {
-      console.error("Error loading alerts:", err);
+      setAlerts([]);
+      setTriggeredAlerts([]);
     }
   };
 
@@ -113,22 +127,29 @@ export default function App() {
     setIsDataLoading(true);
     try {
       const [domRes, globRes, histRes] = await Promise.all([
-        fetch(`/api/rankings?category=${selectedCategory}&mallType=domestic&timestamp=${selectedTimestamp}`),
-        fetch(`/api/rankings?category=${selectedCategory}&mallType=global&timestamp=${selectedTimestamp}`),
-        fetch(`/api/rankings/history?category=${selectedCategory}&mallType=domestic&limitCount=6`)
+        fetch(`/api/rankings?category=${selectedCategory}&mallType=domestic&timestamp=${selectedTimestamp}`).catch(() => null),
+        fetch(`/api/rankings?category=${selectedCategory}&mallType=global&timestamp=${selectedTimestamp}`).catch(() => null),
+        fetch(`/api/rankings/history?category=${selectedCategory}&mallType=domestic&limitCount=6`).catch(() => null)
       ]);
 
+      if (!domRes || !domRes.ok || !globRes || !globRes.ok || !histRes || !histRes.ok) {
+        throw new Error("API Offline");
+      }
+
       const [domData, globData, histData] = await Promise.all([
-        domRes.json(),
-        globRes.json(),
-        histRes.json()
+        domRes.json(), globRes.json(), histRes.json()
       ]);
 
       setDomesticProducts(domData.products || []);
       setGlobalProducts(globData.products || []);
       setHistoricalData(Array.isArray(histData) ? histData : []);
     } catch (err) {
-      console.error("Error loading rankings data:", err);
+      console.warn("백엔드 API 연결 안됨. baselineProducts 데이터를 화면에 표시합니다.");
+      // Fallback: API 호출 실패 시 로컬 샘플 데이터 띄우기
+      setDomesticProducts(baselineProducts || []);
+      // 글로벌 쪽은 시각적 구분을 위해 순서를 뒤집어서 보여줌
+      setGlobalProducts(baselineProducts ? [...baselineProducts].reverse() : []);
+      setHistoricalData([]);
     } finally {
       setIsDataLoading(false);
     }

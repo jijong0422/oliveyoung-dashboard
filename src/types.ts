@@ -46,10 +46,11 @@ export interface Category {
 export interface ScrapeRun {
   id: string;
   timestamp: string;
-  status: "success" | "failed";
-  productsCount: number;
-  durationMs: number;
+  status?: "success" | "failed";
+  productsCount?: number;
+  durationMs?: number;
   isSimulated: boolean;
+  categoriesScraped?: number;
 }
 
 export interface MDInsight {

@@ -1124,3 +1124,12 @@ export function getProductOliveYoungLink(mallType: "domestic" | "global", brand:
     return `https://global.oliveyoung.com/main/getSearchList.do?query=${encodeURIComponent(queryStr)}`;
   }
 }
+
+export const baselineProducts: Product[] = generateBaselineProducts(
+  "all",
+  "domestic",
+  new Date().toISOString()
+);
+
+export default baselineProducts;
+
